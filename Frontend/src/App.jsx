@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import "prismjs/themes/prism-tomorrow.css"
 import Editor from "react-simple-code-editor"
 import prism from "prismjs"
@@ -8,10 +8,13 @@ import "highlight.js/styles/github-dark.css"
 import axios from 'axios'
 import './App.css'
 
-function App() {
-  const [code, setCode] = useState(`function sum() {
+const DEFAULT_CODE = `function sum() {
   return 1 + 1
-}`)
+}`
+
+function App() {
+  const reviewSessionRef = useRef(0)
+  const [code, setCode] = useState(DEFAULT_CODE)
   const [review, setReview] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
@@ -28,32 +31,60 @@ function App() {
     prism.highlightAll()
   }, [])
 
-  async function reviewCode() {
+  const startNewChat = useCallback(() => {
+    reviewSessionRef.current += 1
+    setCode(DEFAULT_CODE)
+    setReview('')
+    setError(null)
+    setLoading(false)
+  }, [])
+
+  const reviewCode = useCallback(async () => {
+    const session = reviewSessionRef.current
     setError(null)
     setLoading(true)
     try {
       const response = await axios.post('http://localhost:3000/ai/get-review', { code })
-      setReview(response.data)
+      if (reviewSessionRef.current === session) setReview(response.data)
     } catch (err) {
-      setError(err.message || 'Failed to get review')
+      if (reviewSessionRef.current === session) {
+        setError(err.message || 'Failed to get review')
+      }
     } finally {
-      setLoading(false)
+      if (reviewSessionRef.current === session) setLoading(false)
     }
-  }
+  }, [code])
+
+  useEffect(() => {
+    function onKeyDown(e) {
+      if (!(e.key === 'Enter' && (e.ctrlKey || e.metaKey))) return
+      e.preventDefault()
+      if (loading) return
+      reviewCode()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [loading, reviewCode])
 
   return (
     <div className={`app theme-${theme}`}>
       <header className="app-header">
         <div className="app-header-left">
-          <div className="app-logo">
+          <button
+            type="button"
+            className="app-logo"
+            onClick={startNewChat}
+            title="New chat"
+            aria-label="Start a new review"
+          >
             <span className="app-logo-mark">
               &lt;/&gt;
             </span>
-          </div>
+          </button>
         </div>
         <div className="app-header-center">
           <h1 className="app-title">Code Review</h1>
-          <p className="app-subtitle">Paste code and get AI-powered feedback</p>
+          <p className="app-subtitle">Paste code and get AI feedback</p>
         </div>
         <div className="app-header-right">
           <button
@@ -76,13 +107,14 @@ function App() {
       <main className="app-main">
         <section className="panel left-panel">
           <div className="editor-toolbar">
-            <span className="editor-toolbar-label">Editor</span>
+            <span className="editor-toolbar-label">Write a code</span>
             <button
               type="button"
               className="review-btn"
               onClick={reviewCode}
               disabled={loading}
               aria-busy={loading}
+              title="Review code · Ctrl+Enter or ⌘+Enter"
             >
               {loading ? (
                 <span className="review-btn-content">
@@ -99,10 +131,10 @@ function App() {
               value={code}
               onValueChange={setCode}
               highlight={code => prism.highlight(code, prism.languages.javascript, "javascript")}
-              padding={16}
+              padding={20}
               style={{
                 fontFamily: '"JetBrains Mono", "Fira Code", "Fira Mono", monospace',
-                fontSize: 14,
+                fontSize: 22,
                 minHeight: '100%',
                 width: '100%',
               }}
@@ -139,7 +171,7 @@ function App() {
             )}
             {!loading && !error && !review && (
               <div className="review-placeholder">
-                Click “Review code” to get feedback on your code.
+                Use “Review code” or press Ctrl+Enter (⌘+Enter on Mac) for feedback.
               </div>
             )}
           </div>
