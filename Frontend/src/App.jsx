@@ -55,6 +55,8 @@ function App() {
     }
   }, [code])
 
+  
+
   useEffect(() => {
     function onKeyDown(e) {
       if (!(e.key === 'Enter' && (e.ctrlKey || e.metaKey))) return
