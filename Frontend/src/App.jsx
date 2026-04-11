@@ -11,6 +11,51 @@ import "./App.css";
 const DEFAULT_CODE = `function sum() {
   return 1 + 1
 }`;
+const REVIEW_HISTORY_STORAGE_KEY = "code-review-history";
+const REVIEW_HISTORY_LIMIT = 10;
+
+function getErrorMessage(err) {
+  return (
+    err?.response?.data?.message ||
+    err?.message ||
+    "Failed to get review"
+  );
+}
+
+function createHistoryId() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function loadReviewHistory() {
+  try {
+    const raw = localStorage.getItem(REVIEW_HISTORY_STORAGE_KEY);
+    if (!raw) return [];
+
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+
+    return parsed
+      .filter(
+        (item) =>
+          item &&
+          typeof item.id === "string" &&
+          typeof item.text === "string" &&
+          typeof item.createdAt === "string"
+      )
+      .slice(0, REVIEW_HISTORY_LIMIT);
+  } catch {
+    return [];
+  }
+}
+
+function formatTimestamp(isoTimestamp) {
+  const date = new Date(isoTimestamp);
+  if (Number.isNaN(date.getTime())) return isoTimestamp;
+  return date.toLocaleString();
+}
 
 function App() {
   const reviewSessionRef = useRef(0);
@@ -18,6 +63,8 @@ function App() {
   const [review, setReview] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [history, setHistory] = useState(() => loadReviewHistory());
+  const [showHistory, setShowHistory] = useState(false);
   const [theme, setTheme] = useState(() => {
     return localStorage.getItem("code-review-theme") || "dark";
   });
@@ -28,8 +75,8 @@ function App() {
   }, [theme]);
 
   useEffect(() => {
-    prism.highlightAll();
-  }, []);
+    localStorage.setItem(REVIEW_HISTORY_STORAGE_KEY, JSON.stringify(history));
+  }, [history]);
 
   const startNewChat = useCallback(() => {
     reviewSessionRef.current += 1;
@@ -47,10 +94,32 @@ function App() {
       const response = await axios.post("http://localhost:3000/ai/get-review", {
         code,
       });
-      if (reviewSessionRef.current === session) setReview(response.data);
+      const payload = response?.data;
+      const reviewText = payload?.data;
+
+      if (!payload?.success || typeof reviewText !== "string") {
+        throw new Error(payload?.message || "Invalid response from review service.");
+      }
+
+      if (reviewSessionRef.current === session) {
+        setReview(reviewText);
+        setHistory((prevHistory) => {
+          const nextHistory = [
+            {
+              id: createHistoryId(),
+              text: reviewText,
+              createdAt: new Date().toISOString(),
+            },
+            ...prevHistory,
+          ].slice(0, REVIEW_HISTORY_LIMIT);
+
+          return nextHistory;
+        });
+      }
     } catch (err) {
       if (reviewSessionRef.current === session) {
-        setError(err.message || "Failed to get review");
+        setReview("");
+        setError(getErrorMessage(err));
       }
     } finally {
       if (reviewSessionRef.current === session) setLoading(false);
@@ -140,13 +209,19 @@ function App() {
               onClick={reviewCode}
               disabled={loading}
               aria-busy={loading}
-              title="Review code · Ctrl+Enter or ⌘+Enter"
+              title={
+                error
+                  ? "Retry · Ctrl+Enter or ⌘+Enter"
+                  : "Review code · Ctrl+Enter or ⌘+Enter"
+              }
             >
               {loading ? (
                 <span className="review-btn-content">
                   <span className="review-btn-spinner" aria-hidden />
                   Analyze
                 </span>
+              ) : error ? (
+                "Retry again"
               ) : (
                 "Review code"
               )}
@@ -158,7 +233,8 @@ function App() {
               onValueChange={setCode}
               highlight={(code) =>
                 prism.highlight(code, prism.languages.javascript, "javascript")
-              }
+       	
+       }
               padding={20}
               style={{
                 fontFamily:
@@ -171,9 +247,44 @@ function App() {
           </div>
         </section>
         <section className="panel right-panel" aria-busy={loading}>
-          <div className="panel-label">Review</div>
+          <div className="panel-header">
+            <div className="panel-label">Review</div>
+            <div className="panel-actions">
+              {showHistory && history.length > 0 && (
+                <button
+                  type="button"
+                  className="clear-history-btn"
+                  onClick={() => setHistory([])}
+                >
+                  Clear History
+                </button>
+              )}
+              <button
+                type="button"
+                className="history-btn"
+                onClick={() => setShowHistory((prev) => !prev)}
+              >
+                {showHistory ? "Close History" : "Show History"}
+              </button>
+            </div>
+          </div>
           <div className="review-content">
-            {loading && (
+            {showHistory ? (
+              history.length === 0 ? (
+                <div className="history-empty">No history yet</div>
+              ) : (
+                <div className="history-list">
+                  {history.map((item) => (
+                    <article className="history-item" key={item.id}>
+                      <div className="history-item-time">
+                        {formatTimestamp(item.createdAt)}
+                      </div>
+                      <p className="history-item-text">{item.text}</p>
+                    </article>
+                  ))}
+                </div>
+              )
+            ) : loading ? (
               <div className="loading-skeleton" aria-hidden>
                 <div className="skeleton-line skeleton-title" />
                 <div className="skeleton-line" />
@@ -185,21 +296,21 @@ function App() {
                 <div className="skeleton-line skeleton-short" />
                 <div className="skeleton-line" />
               </div>
-            )}
-            {!loading && error && (
+            ) : null}
+            {!showHistory && !loading && error && (
               <div className="review-error" role="alert">
                 {error}
               </div>
             )}
-            {!loading && !error && review && (
+            {!showHistory && !loading && !error && review && (
               <div className="review-markdown">
                 <Markdown rehypePlugins={[rehypeHighlight]}>{review}</Markdown>
               </div>
             )}
-            {!loading && !error && !review && (
+            {!showHistory && !loading && !error && !review && (
               <div className="review-placeholder">
-                Use “Review code” or press Ctrl+Enter (⌘+Enter on Mac) for
-                feedback.
+                Use “Review code” or Ctrl+Enter (⌘+Enter on Mac). After an
+                error, the same button becomes “Retry”.
               </div>
             )}
           </div>

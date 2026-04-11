@@ -1,9 +1,5 @@
 const { GoogleGenAI } = require("@google/genai");
 
-const ai = new GoogleGenAI({
-  apiKey: process.env.GOOGLE_GEMINI_KEY,
-});
-
 const systemInstruction = `
                 AI System Instruction: Senior Code Reviewer (7+ Years of Experience)
 
@@ -90,22 +86,45 @@ async function generateContent(prompt) {
     throw new Error("Prompt must be a non-empty string.");
   }
 
-  const response = await ai.models.generateContent({
-    model: "gemini-2.5-flash",
+  const apiKey = process.env.GOOGLE_GEMINI_KEY;
+  if (!apiKey) {
+    const configError = new Error(
+      "Missing GOOGLE_GEMINI_KEY in backend environment."
+    );
+    configError.statusCode = 500;
+    throw configError;
+  }
 
-    config: {
-      systemInstruction: systemInstruction,
-    },
+  const ai = new GoogleGenAI({ apiKey });
 
-    contents: [
-      {
-        role: "user",
-        parts: [{ text: prompt }],
+  try {
+    const response = await ai.models.generateContent({
+      model: "gemini-2.5-flash",
+      config: {
+        systemInstruction: systemInstruction,
       },
-    ],
-  });
+      contents: [
+        {
+          role: "user",
+          parts: [{ text: prompt }],
+        },
+      ],
+    });
 
-  return response.text;
+    return response.text;
+  } catch (error) {
+    const statusCode = error?.status || error?.statusCode;
+    const isUnavailable = statusCode === 503 || statusCode === 429;
+
+    const normalizedError = new Error(
+      isUnavailable
+        ? "AI service unavailable. Please try again shortly."
+        : error?.message || "AI request failed."
+    );
+    normalizedError.statusCode = isUnavailable ? 503 : statusCode && statusCode >= 400 ? statusCode : 500;
+    normalizedError.details = error?.message;
+    throw normalizedError;
+  }
 }
 
 module.exports = generateContent;
